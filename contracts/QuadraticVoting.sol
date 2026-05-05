@@ -22,7 +22,6 @@ contract QuadraticVoting {
         uint votes;
         bool approved;
         bool canceled;
-        bool isSignaling;
         address executable;
         address proposer;
     }
@@ -142,7 +141,6 @@ contract QuadraticVoting {
             votes: 0,
             approved: false,
             canceled: false,
-            isSignaling: _budget == 0,
             executable: _executable,
             proposer: msg.sender
         });
@@ -159,7 +157,7 @@ contract QuadraticVoting {
         require(!prop.approved, "Can't cancel a proposal that's already approved");
         require(!prop.canceled, "The proposal is already cancel");
 
-        if (!prop.isSignaling) --numPendingProposals;
+        if (prop.budget > 0) --numPendingProposals;
         prop.canceled = true;
     }
 
@@ -205,5 +203,25 @@ contract QuadraticVoting {
         _burnTokens(msg.sender, numTokens);
 
         pendingEtherRetrieval[msg.sender] += etherToReturn;
-    } 
+    }
+
+    function getERC20() external view returns(address) {
+        return address(token);
+    }
+
+    function getPendingProposals() external view returns (uint[] memory) {
+        uint[] memory pendingIds = new uint[](numPendingProposals);
+        uint counter = 0;
+
+        for (uint i = 0; i < nextProposalId; ++i) {
+            Proposal storage prop = proposals[i];
+            if (prop.budget > 0 && !prop.approved && !prop.canceled) {
+                if (counter < numPendingProposals) {
+                    pendingIds[counter++] = i;
+                }
+            }
+        }
+
+        return pendingIds;
+    }
 }
