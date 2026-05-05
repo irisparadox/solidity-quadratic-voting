@@ -10,12 +10,12 @@ contract QuadraticVoting {
     }
 
     struct Proposal {
-        uint id;
         string title;
         uint budget;
         uint votes;
         bool approved;
         bool canceled;
+        bool isSignaling;
         address executable;
     }
 
