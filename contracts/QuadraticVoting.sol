@@ -8,6 +8,7 @@ import "./VotingToken.sol";
 
 contract QuadraticVoting {
     enum VotingState { CLOSED, OPEN }
+    enum ProposalState { PENDING, APPROVED, REJECTED, CANCELED, SIGNALFIN }
 
     struct Participant {
         uint tokensOwned;
@@ -15,6 +16,13 @@ contract QuadraticVoting {
         bool active;
     }
 
+    /*
+    * PENDING   = !approved && !canceled && period == currentPeriod
+    * APPROVED  = approved (When a proposal is approved it is implicitly executed)
+    * REJECTED  = !approved && !canceled && period < currentPeriod
+    * CANCELED  = canceled
+    * SIGNALFIN = budget == 0 && !canceled && period < currentPeriod
+    */
     struct Proposal {
         string title;
         string description;
@@ -30,21 +38,22 @@ contract QuadraticVoting {
         bool canceled;
     }
 
-    mapping(address => Participant) public participants;
-    mapping(uint => Proposal) public proposals;
-    mapping(address => mapping(uint => uint)) public votes;
-    mapping(address => mapping(uint => uint)) public tokensStakedPerProposal;
+    mapping(address => Participant) private participants;
+    mapping(uint => Proposal) private proposals;
+    mapping(address => mapping(uint => uint)) private votes;
+    mapping(address => mapping(uint => uint)) private tokensStakedPerProposal;
+    mapping(address => uint[]) private userProposals;
 
     uint private totalBudget;
     uint private numParticipants;
+    uint private numPendingProposals;
     uint private nextProposalId;
-    uint private periodId;
+    uint private currentPeriod;
 
-    /* Data structures to store requests of retrieval of Tokens
-     * and Ether from the contract.
-     */
-    mapping(address => uint) public pendingTokenRetrieval;
-    mapping(address => uint) public pendingEtherRetrieval;
+    /* Data structures to store requests of retrieval of
+    *  Ether from the contract.
+    */
+    mapping(address => uint) private pendingEtherRetrieval;
 
     uint[] private pendingProposalsList;
     uint[] private approvedProposalsList;
@@ -101,13 +110,40 @@ contract QuadraticVoting {
         pendingProposalsList.push(_id);
     }
 
+    function _removePending(uint _id) internal {
+        uint first = proposalToIdx[_id];
+        uint last = pendingProposalsList.length - 1;
+        uint lastId = pendingProposalsList[last];
+
+        pendingProposalsList[first] = lastId;
+        proposalToIdx[lastId] = first;
+
+        pendingProposalsList.pop();
+        delete proposalToIdx[_id];
+    }
+
     function _addApproved(uint _id) internal {
         proposalToIdx[_id] = approvedProposalsList.length;
         approvedProposalsList.push(_id);
     }
 
     function _addSignaling(uint _id) internal {
-        
+        proposalToIdx[_id] = signalingProposalsList.length;
+        signalingProposalsList.push(_id);
+    }
+
+    function _calculateProposalState(uint _id) internal view returns (ProposalState) {
+        Proposal storage prop = proposals[_id];
+        ProposalState propState = ProposalState.APPROVED;
+        if (!prop.approved && !prop.canceled && prop.period == currentPeriod) // PENDING
+            propState = ProposalState.PENDING;
+        else if (!prop.approved && !prop.canceled && prop.period < currentPeriod) // REJECTED
+            propState = ProposalState.REJECTED;
+        else if (prop.canceled) // CANCELED
+            propState = ProposalState.CANCELED;
+        else if (prop.budget == 0 && !prop.canceled && prop.period < currentPeriod) // SIGNALING PROPOSAL FINISHED
+            propState = ProposalState.SIGNALFIN;
+        return propState;
     }
 
     function openVoting() external payable onlyOwner inState(VotingState.CLOSED) {
@@ -162,14 +198,17 @@ contract QuadraticVoting {
             description: _description,
             budget: _budget,
             votes: 0,
-            period: periodId, 
+            period: currentPeriod, 
             approved: false,
             canceled: false,
             executable: _executable,
             proposer: msg.sender
         });
 
-        
+        if (_budget > 0) {
+            ++numPendingProposals;
+            _addPending(proposalId);
+        }
 
         return proposalId;
     }
@@ -181,29 +220,23 @@ contract QuadraticVoting {
         require(!prop.approved, "Can't cancel a proposal that's already approved");
         require(!prop.canceled, "The proposal is already cancel");
 
+        if (prop.budget > 0) {
+            --numPendingProposals;
+            _removePending(proposalId);
+        }
         prop.canceled = true;
     }
 
     function claimTokensRefund(uint proposalId) external {
-        Proposal storage prop = proposals[proposalId];
-
-        // Either the proposal was canceled, or the voting state is closed but the proposal wasn't approved
-        require(prop.canceled || (state == VotingState.CLOSED && !prop.approved), "Can't claim tokens for this proposal");
+        ProposalState propState = _calculateProposalState(proposalId);
+        bool requirementState = propState == ProposalState.REJECTED || propState == ProposalState.CANCELED || propState == ProposalState.SIGNALFIN;
+        require(requirementState, "The proposal you tried to claim from is either still up for voting, or is a signaling proposal during an open voting period");
         
         uint amount = tokensStakedPerProposal[msg.sender][proposalId];
         require(amount > 0, "No tokens to refund");
 
         // Pull the amount of tokens to refund
         tokensStakedPerProposal[msg.sender][proposalId] = 0;
-        pendingTokenRetrieval[msg.sender] += amount;
-    }
-
-    function withdrawTokens() external {
-        uint amount = pendingTokenRetrieval[msg.sender];
-        require(amount > 0, "Nothing to withdraw");
-
-        pendingTokenRetrieval[msg.sender] = 0;
-        require(token.transfer(msg.sender, amount), "Error during the transfer");
     }
 
     function buyTokens() external payable onlyActiveParticipant() {
@@ -228,20 +261,28 @@ contract QuadraticVoting {
         pendingEtherRetrieval[msg.sender] += etherToReturn;
     }
 
+    function claimEtherRefund() external {
+        //TODO transfer to user using pendingEtherRetrieval
+    }
+
     function getERC20() external view returns(address) {
         return address(token);
     }
 
     function getPendingProposals() external view inState(VotingState.OPEN) returns (uint[] memory) {
-        
+        return pendingProposalsList;
     }
 
     function getApprovedProposals() external view inState(VotingState.OPEN) returns (uint[] memory) {
-        
+        return approvedProposalsList;
     }
 
     function getSignalingProposals() external view inState(VotingState.OPEN) returns (uint[] memory) {
-        
+        return signalingProposalsList;
+    }
+
+    function getUserProposals(address _usr) external view returns (uint[] memory) {
+        return userProposals[_usr];
     }
 
     function getProposalInfo(uint _id) external view inState(VotingState.OPEN) returns (Proposal memory) {
