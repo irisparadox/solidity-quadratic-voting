@@ -8,7 +8,7 @@ import "./VotingToken.sol";
 
 contract QuadraticVoting {
     enum VotingState { CLOSED, OPEN }
-    enum ProposalState { PENDING, APPROVED, REJECTED, CANCELED, SIGNALFIN }
+    enum ProposalState { PENDING, APPROVED, REJECTED, CANCELED, SIGNALFIN, UNKNOWN }
 
     struct Participant {
         uint tokensOwned;
@@ -134,6 +134,7 @@ contract QuadraticVoting {
 
     function _calculateProposalState(uint _id) internal view returns (ProposalState) {
         Proposal storage prop = proposals[_id];
+        if (bytes(prop.title).length == 0) return ProposalState.UNKNOWN;
         ProposalState propState = ProposalState.APPROVED;
         if (!prop.approved && !prop.canceled && prop.period == currentPeriod) // PENDING
             propState = ProposalState.PENDING;
@@ -289,5 +290,25 @@ contract QuadraticVoting {
         require(_id < nextProposalId, "Invalid ID");
         Proposal memory p = proposals[_id];
         return p;
+    }
+
+    function stake(uint _proposalId, uint _votes) external inState(VotingState.OPEN) onlyActiveParticipant() {
+        require(_votes > 0, "You need at least 1 vote");
+
+        ProposalState propState = _calculateProposalState(_proposalId);
+        require(propState == ProposalState.PENDING, "This proposal cannot be voted");
+        
+        uint currentVotes = votes[msg.sender][_proposalId];
+        uint newVotes = currentVotes + _votes;
+
+        // find the amount of extra tokens we need to pay for v^2
+        // IMPORTANT NOT TO THINK THIS IS THAT EACH VOTE WE ADD MAKES IT
+        // QUADRATICALLY MORE EXPENSIVE (I almost did that)
+        uint costToVote = (newVotes * newVotes) - (currentVotes * currentVotes);
+        require(participants[msg.sender].tokensOwned >= costToVote, "Insufficient tokens to vote");
+
+        participants[msg.sender].tokensOwned -= costToVote;
+        votes[msg.sender][_proposalId] = newVotes;
+        tokensStakedPerProposal[msg.sender][_proposalId] += costToVote;
     }
 }
