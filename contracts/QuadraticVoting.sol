@@ -10,20 +10,23 @@ contract QuadraticVoting {
     enum VotingState { CLOSED, OPEN }
 
     struct Participant {
+        uint tokensOwned;
         bool registered;
         bool active;
-        uint tokensOwned;
     }
 
     struct Proposal {
         string title;
         string description;
+
         uint budget;
         uint votes;
-        bool approved;
-        bool canceled;
+
         address executable;
         address proposer;
+
+        bool approved;
+        bool canceled;
     }
 
     mapping(address => Participant) public participants;
@@ -33,7 +36,9 @@ contract QuadraticVoting {
 
     uint public totalBudget;
     uint public numParticipants;
+    uint public numSignalingProposals;
     uint public numPendingProposals;
+    uint public numApprovedProposals;
     uint public nextProposalId;
 
     /* Data structures to store requests of retrieval of Tokens
@@ -46,8 +51,8 @@ contract QuadraticVoting {
     uint public tokenPrice;
     uint public maxTokens;
 
-    VotingState public state;
     address public owner;
+    VotingState public state;
 
     constructor(uint _tokenPrice, uint _maxTokens) {
         owner = msg.sender;
@@ -146,6 +151,7 @@ contract QuadraticVoting {
         });
 
         if (_budget > 0) ++numPendingProposals;
+        else ++numSignalingProposals;
 
         return proposalId;
     }
@@ -209,12 +215,13 @@ contract QuadraticVoting {
         return address(token);
     }
 
-    function getPendingProposals() external view returns (uint[] memory) {
+    function getPendingProposals() external view inState(VotingState.OPEN) returns (uint[] memory) {
         uint[] memory pendingIds = new uint[](numPendingProposals);
         uint counter = 0;
+        Proposal storage prop;
 
         for (uint i = 0; i < nextProposalId; ++i) {
-            Proposal storage prop = proposals[i];
+            prop = proposals[i];
             if (prop.budget > 0 && !prop.approved && !prop.canceled) {
                 if (counter < numPendingProposals) {
                     pendingIds[counter++] = i;
@@ -223,5 +230,41 @@ contract QuadraticVoting {
         }
 
         return pendingIds;
+    }
+
+    function getApprovedProposals() external view inState(VotingState.OPEN) returns (uint[] memory) {
+        uint[] memory approvedIds = new uint[](numApprovedProposals);
+        uint counter = 0;
+        Proposal storage prop;
+
+         for (uint i = 0; i < nextProposalId; ++i) {
+            prop = proposals[i];
+            if (prop.budget > 0 && prop.approved && counter < numApprovedProposals) {
+                approvedIds[counter++] = i;
+            }
+        }
+
+        return approvedIds;
+    }
+
+    function getSignalingProposals() external view inState(VotingState.OPEN) returns (uint[] memory) {
+        uint[] memory signalingIds = new uint[](numSignalingProposals);
+        uint counter = 0;
+        Proposal storage prop;
+
+        for (uint i = 0; i < nextProposalId; ++i) {
+            prop = proposals[i];
+            if (prop.budget == 0 && counter < numSignalingProposals) {
+                signalingIds[counter++] = i;
+            }
+        }
+
+        return signalingIds;
+    }
+
+    function getProposalInfo(uint _id) external view inState(VotingState.OPEN) returns (Proposal memory) {
+        require(_id < nextProposalId, "Invalid ID");
+        Proposal memory p = proposals[_id];
+        return p;
     }
 }
