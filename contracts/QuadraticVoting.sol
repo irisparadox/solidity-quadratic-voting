@@ -209,6 +209,8 @@ contract QuadraticVoting {
         if (_budget > 0) {
             ++numPendingProposals;
             _addPending(proposalId);
+        } else {
+            _addSignaling(proposalId);
         }
 
         return proposalId;
@@ -307,8 +309,17 @@ contract QuadraticVoting {
         uint costToVote = (newVotes * newVotes) - (currentVotes * currentVotes);
         require(participants[msg.sender].tokensOwned >= costToVote, "Insufficient tokens to vote");
 
+        // first time voting the proposal, we add it to the user's proposals list
+        if (tokensStakedPerProposal[msg.sender][_proposalId] == 0) {
+            userProposals[msg.sender].push(_proposalId);
+        }
+
         participants[msg.sender].tokensOwned -= costToVote;
         votes[msg.sender][_proposalId] = newVotes;
+        proposals[_proposalId].votes += _votes;
         tokensStakedPerProposal[msg.sender][_proposalId] += costToVote;
+        token.transferFrom(msg.sender, address(this), costToVote);
+
+        // TODO check threshold, if signaling and execute
     }
 }
