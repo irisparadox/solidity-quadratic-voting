@@ -21,6 +21,7 @@ contract QuadraticVoting {
 
         uint budget;
         uint votes;
+        uint period;
 
         address executable;
         address proposer;
@@ -34,12 +35,10 @@ contract QuadraticVoting {
     mapping(address => mapping(uint => uint)) public votes;
     mapping(address => mapping(uint => uint)) public tokensStakedPerProposal;
 
-    uint public totalBudget;
-    uint public numParticipants;
-    uint public numSignalingProposals;
-    uint public numPendingProposals;
-    uint public numApprovedProposals;
-    uint public nextProposalId;
+    uint private totalBudget;
+    uint private numParticipants;
+    uint private nextProposalId;
+    uint private periodId;
 
     /* Data structures to store requests of retrieval of Tokens
      * and Ether from the contract.
@@ -47,9 +46,14 @@ contract QuadraticVoting {
     mapping(address => uint) public pendingTokenRetrieval;
     mapping(address => uint) public pendingEtherRetrieval;
 
-    ERC20 public token;
+    uint[] private pendingProposalsList;
+    uint[] private approvedProposalsList;
+    uint[] private signalingProposalsList;
+    mapping(uint => uint) proposalToIdx;
+
+    ERC20 private token;
     uint public tokenPrice;
-    uint public maxTokens;
+    uint private maxTokens;
 
     address public owner;
     VotingState public state;
@@ -90,6 +94,20 @@ contract QuadraticVoting {
 
     function _burnTokens(address _from, uint256 _amount) internal {
         VotingToken(address(token)).burn(_from, _amount);
+    }
+
+    function _addPending(uint _id) internal {
+        proposalToIdx[_id] = pendingProposalsList.length;
+        pendingProposalsList.push(_id);
+    }
+
+    function _addApproved(uint _id) internal {
+        proposalToIdx[_id] = approvedProposalsList.length;
+        approvedProposalsList.push(_id);
+    }
+
+    function _addSignaling(uint _id) internal {
+        
     }
 
     function openVoting() external payable onlyOwner inState(VotingState.CLOSED) {
@@ -144,14 +162,14 @@ contract QuadraticVoting {
             description: _description,
             budget: _budget,
             votes: 0,
+            period: periodId, 
             approved: false,
             canceled: false,
             executable: _executable,
             proposer: msg.sender
         });
 
-        if (_budget > 0) ++numPendingProposals;
-        else ++numSignalingProposals;
+        
 
         return proposalId;
     }
@@ -163,7 +181,6 @@ contract QuadraticVoting {
         require(!prop.approved, "Can't cancel a proposal that's already approved");
         require(!prop.canceled, "The proposal is already cancel");
 
-        if (prop.budget > 0) --numPendingProposals;
         prop.canceled = true;
     }
 
@@ -216,50 +233,15 @@ contract QuadraticVoting {
     }
 
     function getPendingProposals() external view inState(VotingState.OPEN) returns (uint[] memory) {
-        uint[] memory pendingIds = new uint[](numPendingProposals);
-        uint counter = 0;
-        Proposal storage prop;
-
-        for (uint i = 0; i < nextProposalId; ++i) {
-            prop = proposals[i];
-            if (prop.budget > 0 && !prop.approved && !prop.canceled) {
-                if (counter < numPendingProposals) {
-                    pendingIds[counter++] = i;
-                }
-            }
-        }
-
-        return pendingIds;
+        
     }
 
     function getApprovedProposals() external view inState(VotingState.OPEN) returns (uint[] memory) {
-        uint[] memory approvedIds = new uint[](numApprovedProposals);
-        uint counter = 0;
-        Proposal storage prop;
-
-         for (uint i = 0; i < nextProposalId; ++i) {
-            prop = proposals[i];
-            if (prop.budget > 0 && prop.approved && counter < numApprovedProposals) {
-                approvedIds[counter++] = i;
-            }
-        }
-
-        return approvedIds;
+        
     }
 
     function getSignalingProposals() external view inState(VotingState.OPEN) returns (uint[] memory) {
-        uint[] memory signalingIds = new uint[](numSignalingProposals);
-        uint counter = 0;
-        Proposal storage prop;
-
-        for (uint i = 0; i < nextProposalId; ++i) {
-            prop = proposals[i];
-            if (prop.budget == 0 && counter < numSignalingProposals) {
-                signalingIds[counter++] = i;
-            }
-        }
-
-        return signalingIds;
+        
     }
 
     function getProposalInfo(uint _id) external view inState(VotingState.OPEN) returns (Proposal memory) {
