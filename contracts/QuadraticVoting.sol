@@ -6,6 +6,11 @@ import "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import "./IExecutableProposal.sol";
 import "./VotingToken.sol";
 
+/* QuadraticVoting Contract
+   All state variables were organized to minimize slot usage in storage.
+
+   Public functions:
+*/
 contract QuadraticVoting {
     enum VotingState { CLOSED, OPEN }
     enum ProposalState { PENDING, APPROVED, REJECTED, CANCELED, SIGNALFIN, UNKNOWN }
@@ -42,18 +47,12 @@ contract QuadraticVoting {
     mapping(uint => Proposal) private proposals;
     mapping(address => mapping(uint => uint)) private votes;
     mapping(address => mapping(uint => uint)) private tokensStakedPerProposal;
-    mapping(address => uint[]) private userProposals;
 
     uint private totalBudget;
     uint private numParticipants;
     uint private numPendingProposals;
     uint private nextProposalId;
     uint private currentPeriod;
-
-    /* Data structures to store requests of retrieval of
-    *  Ether from the contract.
-    */
-    mapping(address => uint) private pendingEtherRetrieval;
 
     uint[] private pendingProposalsList;
     uint[] private approvedProposalsList;
@@ -105,31 +104,51 @@ contract QuadraticVoting {
         VotingToken(address(token)).burn(_from, _amount);
     }
 
-    function _addPending(uint _id) internal {
-        proposalToIdx[_id] = pendingProposalsList.length;
-        pendingProposalsList.push(_id);
+    function _add(uint[] storage list, uint _id) internal {
+        proposalToIdx[_id] = list.length;
+        list.push(_id);
     }
 
-    function _removePending(uint _id) internal {
+    function _remove(uint[] storage list, uint _id) internal {
         uint first = proposalToIdx[_id];
-        uint last = pendingProposalsList.length - 1;
-        uint lastId = pendingProposalsList[last];
+        uint last = list.length - 1;
+        uint lastId = list[last];
 
-        pendingProposalsList[first] = lastId;
+        list[first] = lastId;
         proposalToIdx[lastId] = first;
 
-        pendingProposalsList.pop();
+        list.pop();
         delete proposalToIdx[_id];
     }
 
+    function _addPending(uint _id) internal {
+        _add(pendingProposalsList, _id);
+    }
+
     function _addApproved(uint _id) internal {
-        proposalToIdx[_id] = approvedProposalsList.length;
-        approvedProposalsList.push(_id);
+        _add(approvedProposalsList, _id);
     }
 
     function _addSignaling(uint _id) internal {
-        proposalToIdx[_id] = signalingProposalsList.length;
-        signalingProposalsList.push(_id);
+        _add(signalingProposalsList, _id);
+    }
+
+    function _removePending(uint _id) internal {
+        _remove(pendingProposalsList, _id);
+    }
+
+    function _removeSignaling(uint _id) internal {
+        _remove(signalingProposalsList, _id);
+    }
+
+    function _checksThreshold(uint _id) internal view returns (bool) {
+        Proposal storage prop = proposals[_id];
+        uint th = (((20 + (prop.budget * 100) / totalBudget) * numParticipants) / 100) + numPendingProposals;
+        return (prop.votes >= th) && (prop.budget > 0);
+    }
+
+    function _checkAndExecuteProposal(uint _id) internal {
+        
     }
 
     function _calculateProposalState(uint _id) internal view returns (ProposalState) {
@@ -150,6 +169,7 @@ contract QuadraticVoting {
     function openVoting() external payable onlyOwner inState(VotingState.CLOSED) {
         totalBudget = msg.value;
         state = VotingState.OPEN;
+        ++currentPeriod;
     }
 
     function addParticipant() external payable {
@@ -173,7 +193,7 @@ contract QuadraticVoting {
         _mintTokens(msg.sender, tokensToMint);
     }
 
-    function removeParticipant() external onlyActiveParticipant() {
+    function removeParticipant() external onlyActiveParticipant {
         Participant storage p = participants[msg.sender];
 
         p.active = false;
@@ -182,7 +202,7 @@ contract QuadraticVoting {
 
     function addProposal(string memory _title, string memory _description, uint _budget, address _executable)
     external
-    onlyActiveParticipant()
+    onlyActiveParticipant
     inState(VotingState.OPEN)
     returns (uint) {
         // IERC165 Check
@@ -226,11 +246,11 @@ contract QuadraticVoting {
         if (prop.budget > 0) {
             --numPendingProposals;
             _removePending(proposalId);
-        }
+        } else _removeSignaling(proposalId);
         prop.canceled = true;
     }
 
-    function claimTokensRefund(uint proposalId) external {
+    function claimTokensRefund(uint proposalId) external onlyActiveParticipant {
         ProposalState propState = _calculateProposalState(proposalId);
         bool requirementState = propState == ProposalState.REJECTED || propState == ProposalState.CANCELED || propState == ProposalState.SIGNALFIN;
         require(requirementState, "The proposal you tried to claim from is either still up for voting, or is a signaling proposal during an open voting period");
@@ -240,9 +260,10 @@ contract QuadraticVoting {
 
         // Pull the amount of tokens to refund
         tokensStakedPerProposal[msg.sender][proposalId] = 0;
+        token.transfer(msg.sender, amount);
     }
 
-    function buyTokens() external payable onlyActiveParticipant() {
+    function buyTokens() external payable onlyActiveParticipant {
         require(msg.value > 0, "You need to send Ether in order to buy tokens");
 
         // tokens to mint
@@ -261,11 +282,8 @@ contract QuadraticVoting {
         uint etherToReturn = numTokens * tokenPrice;
         _burnTokens(msg.sender, numTokens);
 
-        pendingEtherRetrieval[msg.sender] += etherToReturn;
-    }
-
-    function claimEtherRefund() external {
-        //TODO transfer to user using pendingEtherRetrieval
+        (bool success, ) = payable(msg.sender).call{value: etherToReturn}("");
+        require(success, "ETH transfer failed");
     }
 
     function getERC20() external view returns(address) {
@@ -284,17 +302,13 @@ contract QuadraticVoting {
         return signalingProposalsList;
     }
 
-    function getUserProposals(address _usr) external view returns (uint[] memory) {
-        return userProposals[_usr];
-    }
-
     function getProposalInfo(uint _id) external view inState(VotingState.OPEN) returns (Proposal memory) {
         require(_id < nextProposalId, "Invalid ID");
         Proposal memory p = proposals[_id];
         return p;
     }
 
-    function stake(uint _proposalId, uint _votes) external inState(VotingState.OPEN) onlyActiveParticipant() {
+    function stake(uint _proposalId, uint _votes) external inState(VotingState.OPEN) onlyActiveParticipant {
         require(_votes > 0, "You need at least 1 vote");
 
         ProposalState propState = _calculateProposalState(_proposalId);
@@ -309,17 +323,36 @@ contract QuadraticVoting {
         uint costToVote = (newVotes * newVotes) - (currentVotes * currentVotes);
         require(participants[msg.sender].tokensOwned >= costToVote, "Insufficient tokens to vote");
 
-        // first time voting the proposal, we add it to the user's proposals list
-        if (tokensStakedPerProposal[msg.sender][_proposalId] == 0) {
-            userProposals[msg.sender].push(_proposalId);
-        }
-
         participants[msg.sender].tokensOwned -= costToVote;
         votes[msg.sender][_proposalId] = newVotes;
         proposals[_proposalId].votes += _votes;
         tokensStakedPerProposal[msg.sender][_proposalId] += costToVote;
         token.transferFrom(msg.sender, address(this), costToVote);
 
-        // TODO check threshold, if signaling and execute
+        _checkAndExecuteProposal(_proposalId);
+    }
+
+    function withdrawFromProposal(uint _proposalId, uint _votes) external inState(VotingState.OPEN) onlyActiveParticipant {
+        require(_votes > 0, "You need at least 1 vote");
+
+        ProposalState propState = _calculateProposalState(_proposalId);
+        require(propState == ProposalState.PENDING, "This proposal cannot be voted");
+
+        uint currentVotes = votes[msg.sender][_proposalId];
+        require(currentVotes > 0, "You didn't vote to this proposal yet");
+        require(currentVotes >= _votes, "You can't withdraw more votes than you have");
+
+        /* we have v votes. We want to get rid of n votes, so we end up with v - n votes
+        *  if we had v^2 tokens, and we end up with (v-n)^2 tokens, that means we need
+        *  to refund v^2 - (v-n)^2 tokens
+        */
+        uint votesAfter = currentVotes - _votes;
+        uint tokensToRefund = (currentVotes * currentVotes) - (votesAfter * votesAfter);
+
+        participants[msg.sender].tokensOwned += tokensToRefund;
+        votes[msg.sender][_proposalId] = votesAfter;
+        proposals[_proposalId].votes -= _votes;
+        tokensStakedPerProposal[msg.sender][_proposalId] -= tokensToRefund;
+        token.transfer(msg.sender, tokensToRefund);
     }
 }
