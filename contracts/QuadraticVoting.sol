@@ -34,6 +34,7 @@ contract QuadraticVoting {
 
         uint budget;
         uint votes;
+        uint tokensStaked;
         uint period;
 
         address executable;
@@ -41,6 +42,7 @@ contract QuadraticVoting {
 
         bool approved;
         bool canceled;
+        bool executed;
     }
 
     mapping(address => Participant) private participants;
@@ -79,6 +81,11 @@ contract QuadraticVoting {
 
     modifier onlyOwner() {
         require(msg.sender == owner, "Not owner");
+        _;
+    }
+
+    modifier onlyProposer(uint _id) {
+        require(proposals[_id].proposer == msg.sender, "Only the proposer can execute this proposal");
         _;
     }
 
@@ -148,7 +155,10 @@ contract QuadraticVoting {
     }
 
     function _checkAndExecuteProposal(uint _id) internal {
-        
+        if(_checksThreshold(_id)) {
+            Proposal storage prop = proposals[_id];
+            require(!prop.executed, "")
+        }
     }
 
     function _calculateProposalState(uint _id) internal view returns (ProposalState) {
@@ -169,7 +179,6 @@ contract QuadraticVoting {
     function openVoting() external payable onlyOwner inState(VotingState.CLOSED) {
         totalBudget = msg.value;
         state = VotingState.OPEN;
-        ++currentPeriod;
     }
 
     function addParticipant() external payable {
@@ -219,9 +228,11 @@ contract QuadraticVoting {
             description: _description,
             budget: _budget,
             votes: 0,
+            tokensStaked: 0,
             period: currentPeriod, 
             approved: false,
             canceled: false,
+            executed: false,
             executable: _executable,
             proposer: msg.sender
         });
@@ -326,6 +337,7 @@ contract QuadraticVoting {
         participants[msg.sender].tokensOwned -= costToVote;
         votes[msg.sender][_proposalId] = newVotes;
         proposals[_proposalId].votes += _votes;
+        proposals[_proposalId].tokensStaked += costToVote;
         tokensStakedPerProposal[msg.sender][_proposalId] += costToVote;
         token.transferFrom(msg.sender, address(this), costToVote);
 
@@ -354,5 +366,37 @@ contract QuadraticVoting {
         proposals[_proposalId].votes -= _votes;
         tokensStakedPerProposal[msg.sender][_proposalId] -= tokensToRefund;
         token.transfer(msg.sender, tokensToRefund);
+    }
+
+    function closeVoting() external onlyOwner inState(VotingState.OPEN) {
+        state = VotingState.CLOSED;
+        ++currentPeriod; // this will immediately reject those proposals that were not approved
+
+        // Since this is pull over push we don't really need to do anything more with
+        // proposals since all refunds are up to the clients
+        // Also, executing signaling proposals is now a reponsibility of the proposer
+        uint refundBudget = totalBudget;
+        totalBudget = 0; // avoid reentrancy
+        (bool success, ) = payable(owner).call{value: refundBudget}("");
+        require(success, "Budget transfer failed");
+    }
+
+    function executeSignaling(uint _id) external onlyProposer(_id) {
+        Proposal storage prop = proposals[_id];
+        ProposalState propState = _calculateProposalState(_id);
+
+        require(propState == ProposalState.SIGNALFIN, "You can't execute this signaling proposal");
+        require(!prop.executed, "This proposal was already executed");
+
+        IExecutableProposal executable =
+        IExecutableProposal(prop.executable);
+
+        prop.executed = true;
+
+        executable.executeProposal(
+            _id,
+            prop.votes,
+            prop.tokensStaked
+        );
     }
 }
