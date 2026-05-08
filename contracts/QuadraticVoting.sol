@@ -165,6 +165,7 @@ contract QuadraticVoting {
 
             uint addBudget = prop.tokensStaked * tokenPrice;
             totalBudget += addBudget; // tokens staked to the proposal contribute to the global budget
+            require(totalBudget >= prop.budget, "Total Budget is not enough to execute this proposal.");
             totalBudget -= prop.budget; // budget from the proposal is used
 
             IExecutableProposal(prop.executable).executeProposal{value: prop.budget}(
