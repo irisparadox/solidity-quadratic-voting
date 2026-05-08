@@ -50,20 +50,20 @@ contract QuadraticVoting {
     mapping(address => mapping(uint => uint)) private votes;
     mapping(address => mapping(uint => uint)) private tokensStakedPerProposal;
 
-    uint private totalBudget;
-    uint private numParticipants;
+    uint public totalBudget;
+    uint public numParticipants;
     uint private numPendingProposals;
     uint private nextProposalId;
-    uint private currentPeriod;
+    uint public currentPeriod;
 
     uint[] private pendingProposalsList;
     uint[] private approvedProposalsList;
     uint[] private signalingProposalsList;
-    mapping(uint => uint) proposalToIdx;
+    mapping(uint => uint) private proposalToIdx;
 
     ERC20 private token;
     uint public tokenPrice;
-    uint private maxTokens;
+    uint public maxTokens;
 
     address public owner;
     VotingState public state;
@@ -158,6 +158,7 @@ contract QuadraticVoting {
         if(_checksThreshold(_id)) {
             Proposal storage prop = proposals[_id];
             prop.approved = true;
+            prop.executed = true;
 
             _removePending(_id);
             _addApproved(_id);
@@ -166,12 +167,7 @@ contract QuadraticVoting {
             totalBudget += addBudget; // tokens staked to the proposal contribute to the global budget
             totalBudget -= prop.budget; // budget from the proposal is used
 
-            IExecutableProposal executable =
-            IExecutableProposal(prop.executable);
-
-            prop.executed = true;
-
-            executable.executeProposal(
+            IExecutableProposal(prop.executable).executeProposal{value: prop.budget}(
                 _id,
                 prop.votes,
                 prop.tokensStaked
