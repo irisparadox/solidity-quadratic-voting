@@ -157,7 +157,25 @@ contract QuadraticVoting {
     function _checkAndExecuteProposal(uint _id) internal {
         if(_checksThreshold(_id)) {
             Proposal storage prop = proposals[_id];
-            require(!prop.executed, "")
+            prop.approved = true;
+
+            _removePending(_id);
+            _addApproved(_id);
+
+            uint addBudget = prop.tokensStaked * tokenPrice;
+            totalBudget += addBudget; // tokens staked to the proposal contribute to the global budget
+            totalBudget -= prop.budget; // budget from the proposal is used
+
+            IExecutableProposal executable =
+            IExecutableProposal(prop.executable);
+
+            prop.executed = true;
+
+            executable.executeProposal(
+                _id,
+                prop.votes,
+                prop.tokensStaked
+            );
         }
     }
 
