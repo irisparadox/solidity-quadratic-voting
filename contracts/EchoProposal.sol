@@ -26,6 +26,10 @@ contract EchoProposal is IExecutableProposal, ERC165 {
         );
     }
 
+    function getBalance() external view returns (uint) {
+        return address(this).balance;
+    }
+
     receive() external payable {}
 
     // ERC165 support check

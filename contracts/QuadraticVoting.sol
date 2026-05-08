@@ -68,6 +68,8 @@ contract QuadraticVoting {
     address public owner;
     VotingState public state;
 
+    bool private lock = false;
+
     constructor(uint _tokenPrice, uint _maxTokens) {
         owner = msg.sender;
         state = VotingState.CLOSED;
@@ -155,6 +157,7 @@ contract QuadraticVoting {
     }
 
     function _checkAndExecuteProposal(uint _id) internal {
+        require(!lock, "Execution is locked right now"); // just in case, we don't want reentrancy
         if(_checksThreshold(_id)) {
             Proposal storage prop = proposals[_id];
             prop.approved = true;
@@ -163,10 +166,16 @@ contract QuadraticVoting {
             _removePending(_id);
             _addApproved(_id);
 
+            lock = true; // reentrancy lock
+
             uint addBudget = prop.tokensStaked * tokenPrice;
             totalBudget += addBudget; // tokens staked to the proposal contribute to the global budget
-            require(totalBudget >= prop.budget, "Total Budget is not enough to execute this proposal.");
+            require(totalBudget >= prop.budget, "Total Budget is not enough to execute this proposal."); // underflow check
             totalBudget -= prop.budget; // budget from the proposal is used
+
+            _burnTokens(address(this), prop.tokensStaked);
+
+            lock = false;
 
             IExecutableProposal(prop.executable).executeProposal{value: prop.budget}(
                 _id,
