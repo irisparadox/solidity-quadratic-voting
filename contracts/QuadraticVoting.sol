@@ -197,6 +197,10 @@ contract QuadraticVoting {
     function openVoting() external payable onlyOwner inState(VotingState.CLOSED) {
         totalBudget = msg.value;
         state = VotingState.OPEN;
+
+        delete pendingProposalsList;
+        delete approvedProposalsList;
+        delete signalingProposalsList;
     }
 
     function addParticipant() external payable {
